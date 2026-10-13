@@ -59,7 +59,7 @@
   /** "01｜表情の細部" → { no: "01", title: "表情の細部" } */
   function splitHeading(text) {
     var t = text.replace(/\*\*/g, '').trim();
-    var m = t.match(/^(\d{1,3})\s*[｜|:：.．、)\]）】\s]\s*(.+)$/);
+    var m = t.match(/^([A-Za-zＡ-Ｚ]{0,3}\d{1,3})\s*[｜|:：.．、)\]）】\s]\s*(.+)$/);
     if (m) return { no: m[1], title: m[2].trim() };
     return { no: '', title: t };
   }
@@ -352,6 +352,7 @@
     MAX_KEYWORDS: MAX_KEYWORDS,
     uid: uid,
     splitKeywords: splitKeywords,
+    splitHeading: splitHeading,
     parseMarkdown: parseMarkdown,
     validate: validate,
     toLorebook: toLorebook,

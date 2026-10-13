@@ -146,3 +146,11 @@ test('AI用の指示文は、その例をそのまま読み込める', () => {
   assert.equal(r.entries.length, 1);
   assert.deepEqual(r.entries[0].keywords, ['語1', '語2', '語3', '語4', '語5']);
 });
+
+test('英字付きの番号（A01｜…）も番号として読む', () => {
+  const r = p.parseMarkdown('# 獣人 v1.0\n### A01｜繁殖期と発情周期\n**キーワード：** 発情、繁殖期、ヒート、盛り、排卵\n**本文：** x');
+  assert.equal(r.entries[0].no, 'A01');
+  assert.equal(r.entries[0].title, '繁殖期と発情周期');
+  assert.deepEqual(p.splitHeading('B12 | 嗅覚'), { no: 'B12', title: '嗅覚' });
+  assert.deepEqual(p.splitHeading('光る体'), { no: '', title: '光る体' });
+});

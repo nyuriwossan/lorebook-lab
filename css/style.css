@@ -407,3 +407,18 @@ pre.prompt { white-space: pre-wrap; word-break: break-word; background: var(--su
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }
+
+/* ---------- 編集画面（Zetter の設定集に近い形） ---------- */
+.entry-edit > summary { align-items: center; flex-wrap: nowrap; padding: 6px 6px 6px 12px; min-height: 52px; }
+.entry-edit > summary::before { content: "▸"; color: var(--ink-soft); transition: transform 0.15s; flex: none; }
+.entry-edit[open] > summary::before { transform: rotate(90deg); }
+.ee-title { font-weight: 700; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ee-kw { flex: none; font-size: 0.74rem; color: var(--ink-soft); }
+.ee-tools { flex: none; display: flex; gap: 2px; }
+.icon-btn { width: 36px; height: 36px; border: 0; background: none; border-radius: 8px; display: grid; place-items: center; cursor: pointer; color: var(--ink-soft); }
+.icon-btn:hover { background: var(--surface-2); }
+.icon-btn.danger { color: var(--fp-ink); }
+.icon-btn:disabled { opacity: 0.3; cursor: default; }
+.add-entry { width: 100%; justify-content: center; border-style: dashed; min-height: 52px; border-radius: var(--r-md); }
+.ft-row { border: 1px solid var(--line); border-radius: var(--r-sm); padding: 8px 12px; display: flex; flex-direction: column; gap: 4px; background: var(--surface-2); }
+.ft-row.on { background: var(--surface); border-color: var(--ok-ink); }

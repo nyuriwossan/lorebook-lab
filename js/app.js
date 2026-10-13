@@ -295,7 +295,7 @@
   function noLorebookPanel() {
     return '<section class="panel"><h2>ロアブックがありません</h2>' +
       '<p class="hint">項目名・キーワード・本文を入れるだけで作れます。Markdown を読み込むこともできます（管理タブ）。</p>' +
-      '<div class="row"><button class="btn primary" data-action="quick-add">項目をかんたん登録</button><button class="btn" data-action="add-sample">サンプルを読み込む</button></div></section>';
+      '<div class="row"><button class="btn primary" data-action="new-lb">新しいロアブックを作る</button><button class="btn" data-action="add-sample">サンプルを読み込む</button></div></section>';
   }
 
   /* ================= 照合 ================= */
@@ -380,7 +380,7 @@
       '<span class="mono meta">' + chars + '文字</span><span class="spacer"></span>' +
       '<span class="meta">一致 <b class="mono">' + r.matched.length + '</b> 項目・<b class="mono">' + r.totalHits + '</b> 箇所</span></div>' +
       '<div class="specimen-body">' +
-      '<div class="highlight">' + highlightHTML(x.text, r.occurrences, x.near, entries) + '</div>';
+      '<div class="highlight">' + highlightHTML(x.text, r.occurrences, x.near, entries) + '</div>' + replyLimitNotice(r.matched);
 
     html += '<div class="list">';
     if (!r.matched.length) html += '<p class="empty">一致した項目はありません。</p>';
@@ -1036,8 +1036,8 @@
     state.editingId = null;
     var cur = activeLb();
     var html = '<section class="panel"><div class="panel-head"><span class="eyebrow">Lorebooks</span><h2>ロアブック</h2>' +
-      '<p class="hint">項目名・キーワード・本文を入れるだけで、新しいロアブックや項目を作れます。</p></div>' +
-      '<div class="row"><button class="btn primary" type="button" data-action="quick-add">＋かんたん登録</button></div><div class="list">';
+      '<p class="hint">「編集」で項目名・キーワード・本文を直接入力できます。編集画面の「発火テスト」で、その場で一致を確かめられます。</p></div>' +
+      '<div class="row"><button class="btn primary" type="button" data-action="new-lb">＋新しいロアブック</button></div><div class="list">';
     if (!state.lorebooks.length) html += '<p class="empty">まだありません。下から読み込むか、サンプルを入れてください。</p>';
     state.lorebooks.forEach(function (l) {
       var warns = P.validate(l.entries);
@@ -1220,195 +1220,264 @@
     });
   }
 
-  /* ---------- 編集 ---------- */
+  /* ---------- 編集（Zetter の設定集画面に近い形） ---------- */
+
+  var LIMITS = { entries: 50, body: 1000, perReply: 5, bodyTotal: 5000 };
+  var openEntryIds = {};
+
+  function entryHeading(e) { return (e.no ? e.no + '｜' : '') + (e.title || ''); }
+  function splitKwField(raw) {
+    var out = [];
+    String(raw || '').split(/[、,，]+/).forEach(function (k) {
+      k = k.trim();
+      if (k && out.indexOf(k) === -1) out.push(k);
+    });
+    return out;
+  }
+  function bodyLen(s) { return Array.from(String(s || '')).length; }
+
+  /** 照合タブなどの「＋項目を登録」：今のロアブックの編集画面を開き、空の項目を足す */
+  function openEditorNewEntry() {
+    var lb = activeLb();
+    if (!lb) lb = createLorebook();
+    addEntry(lb);
+    state.editingId = lb.id;
+    state.tab = 'manage';
+    $$('.tab').forEach(function (b) { b.setAttribute('aria-selected', String(b.dataset.tab === 'manage')); });
+    save(); renderView();
+    focusEntry(lb.entries[lb.entries.length - 1]);
+  }
+
+  function createLorebook() {
+    var now = new Date().toISOString();
+    var lb = { id: P.uid('lb'), name: '新しいロアブック', version: 'v0.1', notes: '', entries: [], createdAt: now, updatedAt: now };
+    state.lorebooks.push(lb);
+    state.activeId = lb.id;
+    return lb;
+  }
+
+  function addEntry(lb) {
+    var last = lb.entries[lb.entries.length - 1];
+    var no = '';
+    if (last && last.no) {
+      var m = last.no.match(/^(.*?)(\d+)$/);
+      if (m) no = m[1] + String(+m[2] + 1).padStart(m[2].length, '0');
+    } else if (!last) no = '01';
+    var e = { id: P.uid('e'), no: no, title: '', category: last ? last.category : '', keywords: [], body: '' };
+    lb.entries.push(e);
+    openEntryIds[e.id] = true;
+    lb.updatedAt = new Date().toISOString();
+    return e;
+  }
+
+  function focusEntry(e) {
+    if (!e) return;
+    var box = document.querySelector('.entry-edit[data-id="' + cssEsc(e.id) + '"]');
+    if (!box) return;
+    box.scrollIntoView({ block: 'center' });
+    var inp = $('[data-f="heading"]', box);
+    if (inp) inp.focus({ preventScroll: true });
+  }
 
   function viewEditor(lb) {
-    var html = '<section class="panel"><div class="row"><button class="btn small" type="button" id="ed-back">← 一覧へ戻る</button><span class="spacer"></span><span class="meta">変更は自動で保存されます</span></div>' +
-      '<div class="grid-2"><label class="field"><span class="field-label">名前</span><input type="text" id="ed-name"></label>' +
-      '<label class="field"><span class="field-label">バージョン</span><input type="text" id="ed-ver"></label></div>' +
-      '<div id="ed-warn"></div></section>' +
-      '<section class="panel"><div class="row"><h2>項目 <span class="mono meta">' + lb.entries.length + '</span></h2><span class="spacer"></span><button class="btn small primary" type="button" id="ed-add">項目を追加</button></div>' +
-      '<div class="list" id="ed-list"></div></section>';
-    view.innerHTML = html;
+    view.innerHTML =
+      '<section class="panel editor-head">' +
+        '<div class="row"><button class="btn small" type="button" id="ed-back">← 一覧へ</button><span class="spacer"></span>' +
+        '<button class="btn small primary" type="button" id="ed-test">発火テスト</button></div>' +
+        '<div class="grid-2"><label class="field"><span class="field-label">ロアブック名</span><input type="text" id="ed-name"></label>' +
+        '<label class="field"><span class="field-label">バージョン</span><input type="text" id="ed-ver"></label></div>' +
+        '<div class="row"><p class="hint">項目は最大' + LIMITS.entries + '件・本文は1項目' + LIMITS.body.toLocaleString() + '字まで（Zetterの上限）。変更は自動で保存されます。</p>' +
+        '<span class="spacer"></span><span class="mono" id="ed-count"></span></div>' +
+        '<div id="ed-warn"></div>' +
+      '</section>' +
+      '<div class="list" id="ed-list"></div>' +
+      '<button class="btn add-entry" type="button" id="ed-add">＋ 項目を追加</button>';
     $('#ed-name').value = lb.name;
     $('#ed-ver').value = lb.version || '';
     $('#ed-name').addEventListener('input', function (e) { lb.name = e.target.value; touch(lb); renderPicker(); });
     $('#ed-ver').addEventListener('input', function (e) { lb.version = e.target.value; touch(lb); renderPicker(); });
-    $('#ed-back').addEventListener('click', function () { state.editingId = null; renderView(); window.scrollTo(0, 0); });
+    $('#ed-back').addEventListener('click', function () { state.editingId = null; save(); renderView(); window.scrollTo(0, 0); });
+    $('#ed-test').addEventListener('click', function () { fireTestSheet(lb); });
     $('#ed-add').addEventListener('click', function () {
-      var last = lb.entries[lb.entries.length - 1];
-      var no = last && /^\d+$/.test(last.no) ? String(+last.no + 1).padStart(last.no.length, '0') : '';
-      lb.entries.push({ id: P.uid('e'), no: no, title: '新しい項目', category: last ? last.category : '', keywords: [], body: '' });
-      touch(lb); renderEditorList(lb, lb.entries.length - 1);
+      if (lb.entries.length >= LIMITS.entries) { toast('項目は' + LIMITS.entries + '件までです'); return; }
+      var e = addEntry(lb);
+      touch(lb); renderEditorList(lb); focusEntry(e);
     });
-    renderEditorList(lb, -1);
+    renderEditorList(lb);
   }
 
   function touch(lb) { lb.updatedAt = new Date().toISOString(); save(); renderEditorWarnings(lb); }
 
   function renderEditorWarnings(lb) {
+    var c = $('#ed-count');
+    if (c) {
+      c.textContent = lb.entries.length + '/' + LIMITS.entries;
+      c.style.color = lb.entries.length > LIMITS.entries ? 'var(--fp-ink)' : '';
+    }
+    var add = $('#ed-add');
+    if (add) add.disabled = lb.entries.length >= LIMITS.entries;
     var el = $('#ed-warn');
     if (!el) return;
-    var w = P.validate(lb.entries);
+    var w = P.validate(lb.entries).filter(function (x) { return !/本文が空/.test(x.message); });
+    lb.entries.forEach(function (e) {
+      var n = bodyLen(e.body);
+      if (n > LIMITS.body) w.push({ message: entryHeading(e) + '：本文が' + n + '字あります（' + LIMITS.body + '字まで）' });
+    });
+    if (lb.entries.length > LIMITS.entries) w.push({ message: '項目が' + lb.entries.length + '件あります（' + LIMITS.entries + '件まで）' });
     el.innerHTML = w.length ? '<div class="notice"><b>注意 ' + w.length + '件</b><br>' + w.map(function (x) { return esc(x.message); }).join('<br>') + '</div>' : '';
   }
 
-  function renderEditorList(lb, openIndex) {
+  function kwPreviewHTML(kws) {
+    return kws.map(function (k, i) {
+      return '<span class="chip ' + (i < M.MAX_KEYWORDS ? 'kw' : 'off') + '">' + esc(k) + (Array.from(k).length === 1 ? '<span class="n">1文字</span>' : '') + '</span>';
+    }).join('') + (kws.length > M.MAX_KEYWORDS ? '<span class="pill fp">6個目以降は使われません</span>' : '');
+  }
+
+  var ICON_UP = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 15 6-6 6 6"/></svg>';
+  var ICON_DOWN = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
+  var ICON_TRASH = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg>';
+
+  function renderEditorList(lb) {
     var list = $('#ed-list');
+    if (!lb.entries.length) {
+      list.innerHTML = '<section class="panel"><p class="empty">項目がありません。下の「＋ 項目を追加」から作れます。</p></section>';
+      renderEditorWarnings(lb);
+      bindEditorList(lb, list);
+      return;
+    }
     list.innerHTML = lb.entries.map(function (e, i) {
       var kws = e.keywords || [];
-      var inputs = '';
-      for (var k = 0; k < M.MAX_KEYWORDS; k++) {
-        inputs += '<input type="text" id="kw-' + esc(e.id) + '-' + k + '" data-f="kw" data-k="' + k + '" placeholder="キーワード' + (k + 1) + '" aria-label="キーワード' + (k + 1) + '">';
-      }
-      var over = kws.slice(M.MAX_KEYWORDS).filter(Boolean);
-      return '<details class="entry-edit" data-id="' + esc(e.id) + '"' + (i === openIndex ? ' open' : '') + '>' +
-        '<summary><span class="no" data-sum-no>' + (e.no ? 'No.' + esc(e.no) : '') + '</span><b data-sum-title>' + esc(e.title || '（無題）') + '</b>' +
-        '<span class="meta" data-sum-kw>' + esc(M.activeKeywords(e).join('、')) + '</span></summary>' +
+      var n = bodyLen(e.body);
+      return '<details class="entry-edit" data-id="' + esc(e.id) + '"' + (openEntryIds[e.id] ? ' open' : '') + '>' +
+        '<summary>' +
+          '<span class="ee-title" data-sum-title>' + esc(entryHeading(e) || '（項目名なし）') + '</span>' +
+          '<span class="ee-kw mono" data-sum-kw>' + Math.min(kws.length, M.MAX_KEYWORDS) + '/' + M.MAX_KEYWORDS + '</span>' +
+          '<span class="ee-tools">' +
+            '<button class="icon-btn" type="button" data-up aria-label="上へ"' + (i === 0 ? ' disabled' : '') + '>' + ICON_UP + '</button>' +
+            '<button class="icon-btn" type="button" data-down aria-label="下へ"' + (i === lb.entries.length - 1 ? ' disabled' : '') + '>' + ICON_DOWN + '</button>' +
+            '<button class="icon-btn danger" type="button" data-del-entry aria-label="削除">' + ICON_TRASH + '</button>' +
+          '</span>' +
+        '</summary>' +
         '<div class="fold-body">' +
-          '<div class="grid-2"><label class="field"><span class="field-label">番号</span><input type="text" data-f="no" id="no-' + esc(e.id) + '"></label>' +
-          '<label class="field"><span class="field-label">項目名</span><input type="text" data-f="title" id="title-' + esc(e.id) + '"></label></div>' +
-          '<label class="field"><span class="field-label">分類（任意）</span><input type="text" data-f="category" id="cat-' + esc(e.id) + '"></label>' +
-          '<div class="field"><span class="field-label">キーワード（最大5個・登録する文字列そのまま）</span><div class="kw-inputs">' + inputs + '</div>' +
-          (over.length ? '<div class="row"><span class="pill fp">照合されない超過分</span>' + over.map(function (k) { return '<span class="chip off">' + esc(k) + '</span>'; }).join('') + '<button class="btn small" type="button" data-trim>超過分を削除</button></div>' : '') +
-          '</div>' +
+          '<label class="field"><span class="field-label">項目名</span><input type="text" data-f="heading" id="hd-' + esc(e.id) + '" placeholder="例：A01｜繁殖期と発情周期"></label>' +
+          '<label class="field"><span class="field-label">キーワード（1〜5個。「、」「,」「，」で区切る）</span><input type="text" data-f="kw" id="kw-' + esc(e.id) + '" placeholder="例：発情、繁殖期、ヒート"></label>' +
+          '<div class="chips" data-kw-preview>' + kwPreviewHTML(kws) + '</div>' +
           '<label class="field"><span class="field-label">本文</span><textarea data-f="body" id="body-' + esc(e.id) + '" rows="5"></textarea></label>' +
-          '<div class="row end"><button class="btn small danger" type="button" data-del-entry>この項目を削除</button></div>' +
+          '<div class="row end"><span class="mono meta" data-body-count' + (n > LIMITS.body ? ' style="color:var(--fp-ink)"' : '') + '>' + n + '/' + LIMITS.body + '字</span></div>' +
         '</div></details>';
-    }).join('') || '<p class="empty">項目がありません。</p>';
+    }).join('');
     lb.entries.forEach(function (e) {
       var box = list.querySelector('[data-id="' + cssEsc(e.id) + '"]');
-      $('[data-f="no"]', box).value = e.no || '';
-      $('[data-f="title"]', box).value = e.title || '';
-      $('[data-f="category"]', box).value = e.category || '';
+      $('[data-f="heading"]', box).value = entryHeading(e);
+      $('[data-f="kw"]', box).value = (e.keywords || []).join('、');
       $('[data-f="body"]', box).value = e.body || '';
-      $$('[data-f="kw"]', box).forEach(function (inp, k) { inp.value = (e.keywords || [])[k] || ''; });
     });
+    autosizeAll(list);
     renderEditorWarnings(lb);
+    bindEditorList(lb, list);
+  }
 
+  function bindEditorList(lb, list) {
+    list.ontoggle = null;
+    list.addEventListener('toggle', function (ev) {
+      var box = ev.target;
+      if (box.classList && box.classList.contains('entry-edit')) {
+        if (box.open) { openEntryIds[box.dataset.id] = true; autosizeAll(box); } else delete openEntryIds[box.dataset.id];
+      }
+    }, true);
     list.oninput = function (ev) {
       var box = ev.target.closest('.entry-edit');
       if (!box) return;
       var e = lb.entries.find(function (x) { return x.id === box.dataset.id; });
       var f = ev.target.dataset.f;
       if (!e || !f) return;
-      if (f === 'kw') {
-        var vals = $$('[data-f="kw"]', box).map(function (inp) { return inp.value.trim(); });
-        var over = (e.keywords || []).slice(M.MAX_KEYWORDS);
-        e.keywords = vals.filter(Boolean).concat(over);
-        $('[data-sum-kw]', box).textContent = M.activeKeywords(e).join('、');
-      } else {
-        e[f] = ev.target.value;
-        if (f === 'title') $('[data-sum-title]', box).textContent = e.title || '（無題）';
-        if (f === 'no') $('[data-sum-no]', box).textContent = e.no ? 'No.' + e.no : '';
+      if (f === 'heading') {
+        var h = P.splitHeading(ev.target.value);
+        e.no = h.no; e.title = h.title;
+        $('[data-sum-title]', box).textContent = entryHeading(e) || '（項目名なし）';
+      } else if (f === 'kw') {
+        e.keywords = splitKwField(ev.target.value);
+        $('[data-kw-preview]', box).innerHTML = kwPreviewHTML(e.keywords);
+        $('[data-sum-kw]', box).textContent = Math.min(e.keywords.length, M.MAX_KEYWORDS) + '/' + M.MAX_KEYWORDS;
+      } else if (f === 'body') {
+        e.body = ev.target.value;
+        var n = bodyLen(e.body);
+        var cnt = $('[data-body-count]', box);
+        cnt.textContent = n + '/' + LIMITS.body + '字';
+        cnt.style.color = n > LIMITS.body ? 'var(--fp-ink)' : '';
       }
       touch(lb);
     };
     list.onclick = function (ev) {
       var box = ev.target.closest('.entry-edit');
       if (!box) return;
+      var btn = ev.target.closest('[data-up],[data-down],[data-del-entry]');
+      if (!btn) return;
+      ev.preventDefault();  // summary 内のボタンで開閉しないように
       var idx = lb.entries.findIndex(function (x) { return x.id === box.dataset.id; });
-      if (ev.target.closest('[data-trim]')) {
-        lb.entries[idx].keywords = lb.entries[idx].keywords.slice(0, M.MAX_KEYWORDS);
-        touch(lb); renderEditorList(lb, idx); return;
+      if (btn.hasAttribute('data-up') || btn.hasAttribute('data-down')) {
+        var j = idx + (btn.hasAttribute('data-up') ? -1 : 1);
+        if (j < 0 || j >= lb.entries.length) return;
+        var t = lb.entries[idx]; lb.entries[idx] = lb.entries[j]; lb.entries[j] = t;
+        touch(lb); renderEditorList(lb);
+        return;
       }
-      if (ev.target.closest('[data-del-entry]')) {
-        var e = lb.entries[idx];
-        confirmSheet('項目を削除', '「' + entryPlain(e) + '」を削除します。', '削除する', function () {
-          lb.entries.splice(idx, 1);
-          touch(lb); viewEditor(lb);
-        });
-      }
+      var e = lb.entries[idx];
+      confirmSheet('項目を削除', '「' + (entryHeading(e) || '項目名なし') + '」を削除します。', '削除する', function () {
+        lb.entries.splice(idx, 1);
+        touch(lb); renderEditorList(lb);
+      });
     };
   }
 
-  function cssEsc(s) { return (window.CSS && CSS.escape) ? CSS.escape(s) : String(s).replace(/["\\]/g, '\\$&'); }
-
-  /* ================= かんたん登録 ================= */
-
-  /** 「、」・カンマ・空白で区切ってキーワードにする */
-  function splitQuick(raw) {
-    var seen = [];
-    String(raw || '').split(/[、,，;；\/／|｜\s　]+/).forEach(function (k) {
-      k = k.replace(/^[「『"'“]+|[」』"'”]+$/g, '').trim();
-      if (k && seen.indexOf(k) === -1) seen.push(k);
-    });
-    return seen;
-  }
-
-  function quickAddSheet(preferId) {
-    var cur = preferId ? lbById(preferId) : activeLb();
-    var opts = '<option value="__new">新しいロアブックを作る</option>' + state.lorebooks.map(function (l) {
-      return '<option value="' + esc(l.id) + '"' + (cur && cur.id === l.id ? ' selected' : '') + '>' + esc(lbOption(l)) + ' に追加</option>';
-    }).join('');
+  /** 発火テスト：例文を入れると、各項目の一致／不一致をその場で出す */
+  function fireTestSheet(lb) {
     var s = sheet({
-      title: '項目をかんたん登録',
-      html:
-        '<label class="field"><span class="field-label">登録先</span><select id="qa-target">' + opts + '</select></label>' +
-        '<div class="grid-2" id="qa-new"><label class="field"><span class="field-label">ロアブック名</span><input type="text" id="qa-name" placeholder="例：テスト"></label>' +
-          '<label class="field"><span class="field-label">バージョン</span><input type="text" id="qa-ver" placeholder="例：v0.1"></label></div>' +
-        '<label class="field"><span class="field-label">項目名</span><input type="text" id="qa-title" placeholder="例：光る体"></label>' +
-        '<label class="field"><span class="field-label">キーワード（「、」かスペースで区切る・最大5個）</span><input type="text" id="qa-kw" placeholder="例：足、手、頭"></label>' +
-        '<div class="chips" id="qa-kw-preview"></div>' +
-        '<label class="field"><span class="field-label">本文（任意）</span><textarea id="qa-body" placeholder="例：光る"></textarea></label>',
-      actions: [
-        { label: '閉じる' },
-        { label: '登録して続ける', onClick: function (c, root) { return submitQuick(root, false); } },
-        { label: '登録して照合へ', cls: 'primary', onClick: function (c, root) { return submitQuick(root, true); } }
-      ]
+      title: '発火テスト',
+      focus: false,
+      html: '<p class="hint">今の下書きで、例文に一致する項目を確認します。文字列の部分一致のみで判定します。</p>' +
+        '<label class="field"><span class="field-label">例文</span><textarea id="ft-text" placeholder="例：彼は手を伸ばした"></textarea></label>' +
+        '<div id="ft-out" class="list"></div>'
     });
-    var root = s.el;
-    function syncTarget() { $('#qa-new', root).hidden = $('#qa-target', root).value !== '__new'; }
-    function preview() {
-      var kws = splitQuick($('#qa-kw', root).value);
-      $('#qa-kw-preview', root).innerHTML = kws.map(function (k, i) {
-        return '<span class="chip ' + (i < M.MAX_KEYWORDS ? 'kw' : 'off') + '">' + esc(k) + (Array.from(k).length === 1 ? '<span class="n">1文字</span>' : '') + '</span>';
-      }).join('') + (kws.length > M.MAX_KEYWORDS ? '<span class="pill fp">6個目以降は照合されません</span>' : '');
+    var ta = $('#ft-text', s.el), out = $('#ft-out', s.el);
+    ta.value = state.fireTestText || '';
+    function run() {
+      state.fireTestText = ta.value; save();
+      out.innerHTML = fireTestHTML(ta.value, lb);
+      autosize(ta);
     }
-    if (!state.lorebooks.length) $('#qa-target', root).value = '__new';
-    $('#qa-name', root).value = 'テスト';
-    $('#qa-ver', root).value = 'v0.1';
-    syncTarget();
-    $('#qa-target', root).addEventListener('change', syncTarget);
-    $('#qa-kw', root).addEventListener('input', preview);
-    $('#qa-title', root).focus({ preventScroll: true });
+    ta.addEventListener('input', debounce(run, 120));
+    run();
   }
 
-  function submitQuick(root, goSim) {
-    var title = $('#qa-title', root).value.trim();
-    var kws = splitQuick($('#qa-kw', root).value);
-    if (!title) { toast('項目名を入れてください'); return false; }
-    if (!kws.length) { toast('キーワードを1つ以上入れてください'); return false; }
-    var target = $('#qa-target', root).value;
-    var lb;
-    if (target === '__new') {
-      var now = new Date().toISOString();
-      lb = { id: P.uid('lb'), name: $('#qa-name', root).value.trim() || '新しいロアブック', version: $('#qa-ver', root).value.trim(), notes: '', entries: [], createdAt: now, updatedAt: now };
-      state.lorebooks.push(lb);
-    } else {
-      lb = lbById(target);
-    }
-    var last = lb.entries[lb.entries.length - 1];
-    var no = last && /^\d+$/.test(last.no) ? String(+last.no + 1).padStart(last.no.length, '0') : (lb.entries.length ? '' : '01');
-    lb.entries.push({ id: P.uid('e'), no: no, title: title, category: '', keywords: kws, body: $('#qa-body', root).value.trim() });
-    lb.updatedAt = new Date().toISOString();
-    state.activeId = lb.id;
-    save();
-    toast('「' + title + '」を登録しました');
-    if (goSim) { setTab('sim'); return true; }
-    // 続けて入力：登録先を今のロアブックにして入力欄を空にする
-    var sel = $('#qa-target', root);
-    if (!sel.querySelector('option[value="' + cssEsc(lb.id) + '"]')) {
-      var o = document.createElement('option'); o.value = lb.id; o.textContent = lbOption(lb) + ' に追加'; sel.appendChild(o);
-    }
-    sel.value = lb.id;
-    $('#qa-new', root).hidden = true;
-    ['#qa-title', '#qa-kw', '#qa-body'].forEach(function (id) { $(id, root).value = ''; });
-    $('#qa-kw-preview', root).innerHTML = '';
-    $('#qa-title', root).focus({ preventScroll: true });
-    renderView();
-    return false;
+  function fireTestHTML(text, lb) {
+    if (!text.trim()) return '<p class="empty">例文を入れると、ここに結果が出ます。</p>';
+    var r = M.analyze(text, lb.entries);
+    var hitById = {};
+    r.matched.forEach(function (m) { hitById[m.entry.id] = m; });
+    var html = '<div class="highlight">' + highlightHTML(text, r.occurrences, M.nearMisses(text, lb.entries), lb.entries) + '</div>';
+    html += replyLimitNotice(r.matched);
+    html += '<p><b>' + (r.matched.length ? r.matched.length + '項目が一致' : '一致する項目はありません') + '</b></p>';
+    lb.entries.forEach(function (e) {
+      var m = hitById[e.id];
+      html += '<div class="ft-row ' + (m ? 'on' : '') + '"><div class="row"><b>' + esc(entryHeading(e) || '（項目名なし）') + '</b>' +
+        '<span class="pill ' + (m ? 'ok' : 'neutral') + '">' + (m ? '一致' : '不一致') + '</span></div>' +
+        (m ? '<div class="chips">' + m.hits.map(function (h) { return '<span class="chip kw">' + esc(h.keyword) + '<span class="n">×' + h.count + '</span></span>'; }).join('') + '</div>'
+           : '<span class="meta">例文に一致するキーワードがありません</span>') + '</div>';
+    });
+    return html;
   }
+
+  /** Zetter の「返信1回につき最大5項目・本文合計5,000字」を超えそうなときの注意 */
+  function replyLimitNotice(matched) {
+    var total = matched.reduce(function (n, m) { return n + bodyLen(m.entry.body); }, 0);
+    var msgs = [];
+    if (matched.length > LIMITS.perReply) msgs.push(matched.length + '項目が一致しています。Zetterでは返信1回につき最大' + LIMITS.perReply + '項目まで使われるため、どれかは使われません（どの項目が優先されるかは未確認）。');
+    if (total > LIMITS.bodyTotal) msgs.push('一致した項目の本文が合計' + total.toLocaleString() + '字あります（Zetterでは合計' + LIMITS.bodyTotal.toLocaleString() + '字まで）。');
+    return msgs.length ? '<div class="notice" style="background:var(--warn-bg);color:var(--warn-ink)">' + msgs.map(esc).join('<br>') + '</div>' : '';
+  }
+
+  function cssEsc(s) { return (window.CSS && CSS.escape) ? CSS.escape(s) : String(s).replace(/["\\]/g, '\\$&'); }
 
   /* ================= 使い方 ================= */
 
@@ -1417,7 +1486,7 @@
     return '<section class="panel" style="background:var(--accent-soft);border-color:transparent">' +
       '<h2>はじめに</h2>' +
       '<p>ロアブックのキーワードが、会話文のどこに一致するかを確かめる道具です。Zetaに登録する前の下書きでも使えます。</p>' +
-      '<ol class="steps"><li><b>項目を登録</b>：項目名・キーワード・本文を入れる</li><li><b>文章を貼る</b>：この画面に会話文を入れると、一致した所が黄色になる</li><li><b>弱点を見る</b>：監査タブの「設計点検」で誤発火しやすい語を確認</li></ol>' +
+      '<ol class="steps"><li><b>項目を登録</b>：項目名・キーワード・本文を入れる（発火テストもその場でできる）</li><li><b>文章を貼る</b>：この画面に会話文を入れると、一致した所が黄色になる</li><li><b>弱点を見る</b>：監査タブの「設計点検」で誤発火しやすい語を確認</li></ol>' +
       '<div class="row"><button class="btn small primary" type="button" data-action="quick-add">項目を登録する</button><button class="btn small" type="button" data-action="open-guide">使い方をくわしく</button>' +
       '<span class="spacer"></span><button class="btn small ghost" type="button" data-action="dismiss-welcome">閉じる</button></div></section>';
   }
@@ -1428,7 +1497,7 @@
         '<p>登録したキーワードが、文章のどこに<b>文字列として</b>一致するかを調べます。Zetaもロアブックの登録も不要で、下書きの段階から使えます。</p>' +
         '<p class="hint">分かるのは「どの項目が呼ばれそうか（発火候補）」までです。呼ばれたあとAIが本文どおりに描写するかは、Zetaの実機で試す必要があります。</p>'],
       ['1. 項目を登録する',
-        '<p>照合タブか管理タブの「<b>＋項目を登録</b>」から、項目名・キーワード・本文を入れます。キーワードは「、」かスペースで区切ります（最大5個）。</p>' +
+        '<p>管理タブの「<b>＋新しいロアブック</b>」か各ロアブックの「編集」で、項目名・キーワード・本文を入れます。キーワードは「、」「,」「，」で区切ります（最大5個）。画面上の「<b>発火テスト</b>」で、例文を入れてすぐ一致を確かめられます。</p>' +
         '<p>AIが作ったロアブックは、管理タブの「貼り付け」に Markdown をそのまま貼れば、まとめて読み込めます。</p>'],
       ['2. 照合：文章を貼って確かめる',
         '<p>「ユーザー発言」「AI生成文」の欄に文章を貼ると、一致した箇所が<span style="background:var(--mark)">黄色</span>になります。黄色をタップすると、どの項目のどのキーワードかが分かります。</p>' +
@@ -1481,7 +1550,8 @@
       if (a.dataset.action === 'add-sample') addSample();
       if (a.dataset.action === 'goto-manage') setTab('manage');
       if (a.dataset.action === 'dup-active') { duplicateLb(activeLb()); renderView(); }
-      if (a.dataset.action === 'quick-add') quickAddSheet();
+      if (a.dataset.action === 'quick-add') openEditorNewEntry();
+      if (a.dataset.action === 'new-lb') { createLorebook(); addEntry(activeLb()); state.editingId = state.activeId; save(); renderView(); focusEntry(activeLb().entries[0]); }
       if (a.dataset.action === 'open-guide') guideSheet();
       if (a.dataset.action === 'dismiss-welcome') { state.guideSeen = true; save(); var w = a.closest('.panel'); if (w) w.remove(); }
     });
