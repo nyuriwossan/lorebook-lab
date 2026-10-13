@@ -223,6 +223,7 @@
       name: extra.name || parsed.name,
       version: extra.version != null ? extra.version : parsed.version,
       notes: parsed.notes || '',
+      platform: extra.platform || 'zeta',
       entries: parsed.entries.map(function (e) {
         return { id: e.id || uid('e'), no: e.no || '', title: e.title || '', category: e.category || '', keywords: (e.keywords || []).slice(), body: e.body || '' };
       }),
@@ -303,6 +304,7 @@
         name: String(lb.name || '読み込んだロアブック'),
         version: String(lb.version || ''),
         notes: String(lb.notes || ''),
+        platform: lb.platform === 'zetter' ? 'zetter' : 'zeta',
         entries: (lb.entries || []).map(normEntry),
         createdAt: lb.createdAt || now,
         updatedAt: now

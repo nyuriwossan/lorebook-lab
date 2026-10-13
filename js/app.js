@@ -380,7 +380,7 @@
       '<span class="mono meta">' + chars + '文字</span><span class="spacer"></span>' +
       '<span class="meta">一致 <b class="mono">' + r.matched.length + '</b> 項目・<b class="mono">' + r.totalHits + '</b> 箇所</span></div>' +
       '<div class="specimen-body">' +
-      '<div class="highlight">' + highlightHTML(x.text, r.occurrences, x.near, entries) + '</div>' + replyLimitNotice(r.matched);
+      '<div class="highlight">' + highlightHTML(x.text, r.occurrences, x.near, entries) + '</div>' + replyLimitNotice(r.matched, activeLb());
 
     html += '<div class="list">';
     if (!r.matched.length) html += '<p class="empty">一致した項目はありません。</p>';
@@ -1042,7 +1042,7 @@
     state.lorebooks.forEach(function (l) {
       var warns = P.validate(l.entries);
       html += '<div class="lb-card' + (cur && cur.id === l.id ? ' active' : '') + '">' +
-        '<div class="row"><span class="lb-name">' + esc(l.name) + '</span>' + (l.version ? '<span class="pill neutral">' + esc(l.version) + '</span>' : '') +
+        '<div class="row"><span class="lb-name">' + esc(l.name) + '</span>' + (l.version ? '<span class="pill neutral">' + esc(l.version) + '</span>' : '') + '<span class="pill ' + (limitsFor(l).label === 'Zeta' ? 'user' : 'ai') + '">' + limitsFor(l).label + '</span>' +
         (cur && cur.id === l.id ? '<span class="pill ok">使用中</span>' : '') + '</div>' +
         '<div class="meta">' + l.entries.length + '項目・更新 ' + fmtDate(l.updatedAt) + (warns.length ? '・<span style="color:var(--warn-ink)">注意 ' + warns.length + '件</span>' : '') + '</div>' +
         '<div class="row">' +
@@ -1222,7 +1222,13 @@
 
   /* ---------- 編集（Zetter の設定集画面に近い形） ---------- */
 
-  var LIMITS = { entries: 50, body: 1000, perReply: 5, bodyTotal: 5000 };
+  /** サービスごとの上限。返信1回あたりの上限は Zeta では未確認なので null */
+  var PLATFORMS = {
+    zeta: { label: 'Zeta', entries: 50, body: 500, perReply: null, bodyTotal: null },
+    zetter: { label: 'Zetter', entries: 50, body: 1000, perReply: 5, bodyTotal: 5000 }
+  };
+  function limitsFor(lb) { return PLATFORMS[(lb && lb.platform) || 'zeta'] || PLATFORMS.zeta; }
+  var LIMITS = PLATFORMS.zeta;
   var openEntryIds = {};
 
   function entryHeading(e) { return (e.no ? e.no + '｜' : '') + (e.title || ''); }
@@ -1250,7 +1256,7 @@
 
   function createLorebook() {
     var now = new Date().toISOString();
-    var lb = { id: P.uid('lb'), name: '新しいロアブック', version: 'v0.1', notes: '', entries: [], createdAt: now, updatedAt: now };
+    var lb = { id: P.uid('lb'), name: '新しいロアブック', version: 'v0.1', platform: 'zeta', notes: '', entries: [], createdAt: now, updatedAt: now };
     state.lorebooks.push(lb);
     state.activeId = lb.id;
     return lb;
@@ -1280,13 +1286,17 @@
   }
 
   function viewEditor(lb) {
+    LIMITS = limitsFor(lb);
     view.innerHTML =
       '<section class="panel editor-head">' +
         '<div class="row"><button class="btn small" type="button" id="ed-back">← 一覧へ</button><span class="spacer"></span>' +
         '<button class="btn small primary" type="button" id="ed-test">発火テスト</button></div>' +
         '<div class="grid-2"><label class="field"><span class="field-label">ロアブック名</span><input type="text" id="ed-name"></label>' +
         '<label class="field"><span class="field-label">バージョン</span><input type="text" id="ed-ver"></label></div>' +
-        '<div class="row"><p class="hint">項目は最大' + LIMITS.entries + '件・本文は1項目' + LIMITS.body.toLocaleString() + '字まで（Zetterの上限）。変更は自動で保存されます。</p>' +
+        '<div class="field"><span class="field-label">登録先のサービス（上限の表示に使います）</span><div class="seg" id="ed-platform">' +
+          Object.keys(PLATFORMS).map(function (k) { return '<button type="button" data-v="' + k + '" aria-pressed="' + (limitsFor(lb) === PLATFORMS[k]) + '">' + PLATFORMS[k].label + '</button>'; }).join('') +
+        '</div></div>' +
+        '<div class="row"><p class="hint" id="ed-limit-hint">' + limitHint(lb) + '</p>' +
         '<span class="spacer"></span><span class="mono" id="ed-count"></span></div>' +
         '<div id="ed-warn"></div>' +
       '</section>' +
@@ -1298,6 +1308,11 @@
     $('#ed-ver').addEventListener('input', function (e) { lb.version = e.target.value; touch(lb); renderPicker(); });
     $('#ed-back').addEventListener('click', function () { state.editingId = null; save(); renderView(); window.scrollTo(0, 0); });
     $('#ed-test').addEventListener('click', function () { fireTestSheet(lb); });
+    segToggle($('#ed-platform'), function (v) {
+      lb.platform = v; LIMITS = limitsFor(lb);
+      $('#ed-limit-hint').innerHTML = limitHint(lb);
+      touch(lb); renderEditorList(lb);
+    });
     $('#ed-add').addEventListener('click', function () {
       if (lb.entries.length >= LIMITS.entries) { toast('項目は' + LIMITS.entries + '件までです'); return; }
       var e = addEntry(lb);
@@ -1306,9 +1321,16 @@
     renderEditorList(lb);
   }
 
+  function limitHint(lb) {
+    var L = limitsFor(lb);
+    return esc(L.label + '：項目は最大' + L.entries + '件・本文は1項目' + L.body.toLocaleString() + '字まで' +
+      (L.perReply ? '・返信1回につき最大' + L.perReply + '項目／本文合計' + L.bodyTotal.toLocaleString() + '字' : '') + '。変更は自動で保存されます。');
+  }
+
   function touch(lb) { lb.updatedAt = new Date().toISOString(); save(); renderEditorWarnings(lb); }
 
   function renderEditorWarnings(lb) {
+    LIMITS = limitsFor(lb);
     var c = $('#ed-count');
     if (c) {
       c.textContent = lb.entries.length + '/' + LIMITS.entries;
@@ -1456,7 +1478,8 @@
     var hitById = {};
     r.matched.forEach(function (m) { hitById[m.entry.id] = m; });
     var html = '<div class="highlight">' + highlightHTML(text, r.occurrences, M.nearMisses(text, lb.entries), lb.entries) + '</div>';
-    html += replyLimitNotice(r.matched);
+    LIMITS = limitsFor(lb);
+    html += replyLimitNotice(r.matched, lb);
     html += '<p><b>' + (r.matched.length ? r.matched.length + '項目が一致' : '一致する項目はありません') + '</b></p>';
     lb.entries.forEach(function (e) {
       var m = hitById[e.id];
@@ -1469,11 +1492,13 @@
   }
 
   /** Zetter の「返信1回につき最大5項目・本文合計5,000字」を超えそうなときの注意 */
-  function replyLimitNotice(matched) {
+  function replyLimitNotice(matched, lb) {
+    var L = limitsFor(lb);
+    if (!L.perReply) return '';
     var total = matched.reduce(function (n, m) { return n + bodyLen(m.entry.body); }, 0);
     var msgs = [];
-    if (matched.length > LIMITS.perReply) msgs.push(matched.length + '項目が一致しています。Zetterでは返信1回につき最大' + LIMITS.perReply + '項目まで使われるため、どれかは使われません（どの項目が優先されるかは未確認）。');
-    if (total > LIMITS.bodyTotal) msgs.push('一致した項目の本文が合計' + total.toLocaleString() + '字あります（Zetterでは合計' + LIMITS.bodyTotal.toLocaleString() + '字まで）。');
+    if (matched.length > L.perReply) msgs.push(matched.length + '項目が一致しています。' + L.label + 'では返信1回につき最大' + L.perReply + '項目まで使われるため、どれかは使われません（どの項目が優先されるかは未確認）。');
+    if (total > L.bodyTotal) msgs.push('一致した項目の本文が合計' + total.toLocaleString() + '字あります（' + L.label + 'では合計' + L.bodyTotal.toLocaleString() + '字まで）。');
     return msgs.length ? '<div class="notice" style="background:var(--warn-bg);color:var(--warn-ink)">' + msgs.map(esc).join('<br>') + '</div>' : '';
   }
 
