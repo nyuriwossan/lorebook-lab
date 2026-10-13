@@ -36,7 +36,8 @@
       tab: 'sim',
       auditView: 'cases',
       recordFilter: 'all',
-      editingId: null
+      editingId: null,
+      guideSeen: false
     };
   }
 
@@ -293,14 +294,14 @@
 
   function noLorebookPanel() {
     return '<section class="panel"><h2>ロアブックがありません</h2>' +
-      '<p class="hint">管理タブで Markdown か JSON を読み込むか、サンプル（描写演出ロアブック v0.3）を入れてください。</p>' +
-      '<div class="row"><button class="btn primary" data-action="add-sample">サンプルを読み込む</button><button class="btn" data-action="goto-manage">管理タブへ</button></div></section>';
+      '<p class="hint">項目名・キーワード・本文を入れるだけで作れます。Markdown を読み込むこともできます（管理タブ）。</p>' +
+      '<div class="row"><button class="btn primary" data-action="quick-add">項目をかんたん登録</button><button class="btn" data-action="add-sample">サンプルを読み込む</button></div></section>';
   }
 
   /* ================= 照合 ================= */
 
   function viewSim() {
-    view.innerHTML =
+    view.innerHTML = welcomePanel() +
       '<section class="panel">' +
         '<div class="panel-head"><span class="eyebrow">String match</span><h2>文字列一致シミュレーター</h2>' +
         '<p class="hint">登録キーワードとの部分一致だけで判定します。ひらがな・カタカナ、全角・半角、大文字・小文字は変換せず、活用形も補いません。表示されるのは実機の発火状態ではなく「発火候補」です。</p></div>' +
@@ -309,6 +310,7 @@
           '<label class="field"><span class="field-label"><span class="pill ai">AI生成文</span></span><textarea id="sim-ai" placeholder="AIの生成文を貼り付け"></textarea></label>' +
         '</div>' +
         '<div class="row"><button class="btn small" id="sim-sample" type="button">例文を入れる</button><button class="btn small" id="sim-clear" type="button">入力を消す</button>' +
+        '<button class="btn small" type="button" data-action="quick-add">＋項目を登録</button>' +
         '<span class="spacer"></span><button class="btn small" id="sim-missed" type="button">拾い漏れを記録</button></div>' +
       '</section>' +
       '<div id="sim-out" class="list"></div>';
@@ -1033,7 +1035,9 @@
     if (state.editingId && lbById(state.editingId)) return viewEditor(lbById(state.editingId));
     state.editingId = null;
     var cur = activeLb();
-    var html = '<section class="panel"><div class="panel-head"><span class="eyebrow">Lorebooks</span><h2>ロアブック</h2></div><div class="list">';
+    var html = '<section class="panel"><div class="panel-head"><span class="eyebrow">Lorebooks</span><h2>ロアブック</h2>' +
+      '<p class="hint">項目名・キーワード・本文を入れるだけで、新しいロアブックや項目を作れます。</p></div>' +
+      '<div class="row"><button class="btn primary" type="button" data-action="quick-add">＋かんたん登録</button></div><div class="list">';
     if (!state.lorebooks.length) html += '<p class="empty">まだありません。下から読み込むか、サンプルを入れてください。</p>';
     state.lorebooks.forEach(function (l) {
       var warns = P.validate(l.entries);
@@ -1320,6 +1324,141 @@
 
   function cssEsc(s) { return (window.CSS && CSS.escape) ? CSS.escape(s) : String(s).replace(/["\\]/g, '\\$&'); }
 
+  /* ================= かんたん登録 ================= */
+
+  /** 「、」・カンマ・空白で区切ってキーワードにする */
+  function splitQuick(raw) {
+    var seen = [];
+    String(raw || '').split(/[、,，;；\/／|｜\s　]+/).forEach(function (k) {
+      k = k.replace(/^[「『"'“]+|[」』"'”]+$/g, '').trim();
+      if (k && seen.indexOf(k) === -1) seen.push(k);
+    });
+    return seen;
+  }
+
+  function quickAddSheet(preferId) {
+    var cur = preferId ? lbById(preferId) : activeLb();
+    var opts = '<option value="__new">新しいロアブックを作る</option>' + state.lorebooks.map(function (l) {
+      return '<option value="' + esc(l.id) + '"' + (cur && cur.id === l.id ? ' selected' : '') + '>' + esc(lbOption(l)) + ' に追加</option>';
+    }).join('');
+    var s = sheet({
+      title: '項目をかんたん登録',
+      html:
+        '<label class="field"><span class="field-label">登録先</span><select id="qa-target">' + opts + '</select></label>' +
+        '<div class="grid-2" id="qa-new"><label class="field"><span class="field-label">ロアブック名</span><input type="text" id="qa-name" placeholder="例：テスト"></label>' +
+          '<label class="field"><span class="field-label">バージョン</span><input type="text" id="qa-ver" placeholder="例：v0.1"></label></div>' +
+        '<label class="field"><span class="field-label">項目名</span><input type="text" id="qa-title" placeholder="例：光る体"></label>' +
+        '<label class="field"><span class="field-label">キーワード（「、」かスペースで区切る・最大5個）</span><input type="text" id="qa-kw" placeholder="例：足、手、頭"></label>' +
+        '<div class="chips" id="qa-kw-preview"></div>' +
+        '<label class="field"><span class="field-label">本文（任意）</span><textarea id="qa-body" placeholder="例：光る"></textarea></label>',
+      actions: [
+        { label: '閉じる' },
+        { label: '登録して続ける', onClick: function (c, root) { return submitQuick(root, false); } },
+        { label: '登録して照合へ', cls: 'primary', onClick: function (c, root) { return submitQuick(root, true); } }
+      ]
+    });
+    var root = s.el;
+    function syncTarget() { $('#qa-new', root).hidden = $('#qa-target', root).value !== '__new'; }
+    function preview() {
+      var kws = splitQuick($('#qa-kw', root).value);
+      $('#qa-kw-preview', root).innerHTML = kws.map(function (k, i) {
+        return '<span class="chip ' + (i < M.MAX_KEYWORDS ? 'kw' : 'off') + '">' + esc(k) + (Array.from(k).length === 1 ? '<span class="n">1文字</span>' : '') + '</span>';
+      }).join('') + (kws.length > M.MAX_KEYWORDS ? '<span class="pill fp">6個目以降は照合されません</span>' : '');
+    }
+    if (!state.lorebooks.length) $('#qa-target', root).value = '__new';
+    $('#qa-name', root).value = 'テスト';
+    $('#qa-ver', root).value = 'v0.1';
+    syncTarget();
+    $('#qa-target', root).addEventListener('change', syncTarget);
+    $('#qa-kw', root).addEventListener('input', preview);
+    $('#qa-title', root).focus({ preventScroll: true });
+  }
+
+  function submitQuick(root, goSim) {
+    var title = $('#qa-title', root).value.trim();
+    var kws = splitQuick($('#qa-kw', root).value);
+    if (!title) { toast('項目名を入れてください'); return false; }
+    if (!kws.length) { toast('キーワードを1つ以上入れてください'); return false; }
+    var target = $('#qa-target', root).value;
+    var lb;
+    if (target === '__new') {
+      var now = new Date().toISOString();
+      lb = { id: P.uid('lb'), name: $('#qa-name', root).value.trim() || '新しいロアブック', version: $('#qa-ver', root).value.trim(), notes: '', entries: [], createdAt: now, updatedAt: now };
+      state.lorebooks.push(lb);
+    } else {
+      lb = lbById(target);
+    }
+    var last = lb.entries[lb.entries.length - 1];
+    var no = last && /^\d+$/.test(last.no) ? String(+last.no + 1).padStart(last.no.length, '0') : (lb.entries.length ? '' : '01');
+    lb.entries.push({ id: P.uid('e'), no: no, title: title, category: '', keywords: kws, body: $('#qa-body', root).value.trim() });
+    lb.updatedAt = new Date().toISOString();
+    state.activeId = lb.id;
+    save();
+    toast('「' + title + '」を登録しました');
+    if (goSim) { setTab('sim'); return true; }
+    // 続けて入力：登録先を今のロアブックにして入力欄を空にする
+    var sel = $('#qa-target', root);
+    if (!sel.querySelector('option[value="' + cssEsc(lb.id) + '"]')) {
+      var o = document.createElement('option'); o.value = lb.id; o.textContent = lbOption(lb) + ' に追加'; sel.appendChild(o);
+    }
+    sel.value = lb.id;
+    $('#qa-new', root).hidden = true;
+    ['#qa-title', '#qa-kw', '#qa-body'].forEach(function (id) { $(id, root).value = ''; });
+    $('#qa-kw-preview', root).innerHTML = '';
+    $('#qa-title', root).focus({ preventScroll: true });
+    renderView();
+    return false;
+  }
+
+  /* ================= 使い方 ================= */
+
+  function welcomePanel() {
+    if (state.guideSeen) return '';
+    return '<section class="panel" style="background:var(--accent-soft);border-color:transparent">' +
+      '<h2>はじめに</h2>' +
+      '<p>ロアブックのキーワードが、会話文のどこに一致するかを確かめる道具です。Zetaに登録する前の下書きでも使えます。</p>' +
+      '<ol class="steps"><li><b>項目を登録</b>：項目名・キーワード・本文を入れる</li><li><b>文章を貼る</b>：この画面に会話文を入れると、一致した所が黄色になる</li><li><b>弱点を見る</b>：監査タブの「設計点検」で誤発火しやすい語を確認</li></ol>' +
+      '<div class="row"><button class="btn small primary" type="button" data-action="quick-add">項目を登録する</button><button class="btn small" type="button" data-action="open-guide">使い方をくわしく</button>' +
+      '<span class="spacer"></span><button class="btn small ghost" type="button" data-action="dismiss-welcome">閉じる</button></div></section>';
+  }
+
+  function guideSheet() {
+    var g = [
+      ['このツールでできること',
+        '<p>登録したキーワードが、文章のどこに<b>文字列として</b>一致するかを調べます。Zetaもロアブックの登録も不要で、下書きの段階から使えます。</p>' +
+        '<p class="hint">分かるのは「どの項目が呼ばれそうか（発火候補）」までです。呼ばれたあとAIが本文どおりに描写するかは、Zetaの実機で試す必要があります。</p>'],
+      ['1. 項目を登録する',
+        '<p>照合タブか管理タブの「<b>＋項目を登録</b>」から、項目名・キーワード・本文を入れます。キーワードは「、」かスペースで区切ります（最大5個）。</p>' +
+        '<p>AIが作ったロアブックは、管理タブの「貼り付け」に Markdown をそのまま貼れば、まとめて読み込めます。</p>'],
+      ['2. 照合：文章を貼って確かめる',
+        '<p>「ユーザー発言」「AI生成文」の欄に文章を貼ると、一致した箇所が<span style="background:var(--mark)">黄色</span>になります。黄色をタップすると、どの項目のどのキーワードかが分かります。</p>' +
+        '<p>試す文章は、自分で書いた数行、過去の会話ログ、AIに書かせたテスト会話のどれでも構いません。</p>' +
+        '<p>一致箇所の「適切／不適切」を押すと、判断が記録に残ります。</p>'],
+      ['3. 監査：弱点を見つける',
+        '<p><b>設計点検</b>：文章なしで、キーワードそのものを点検します。1文字のキーワードや、日常語に紛れ込む語（例：手→上手・手紙）が一覧になります。下の語彙リストに語を足すと、点検の範囲が広がります。</p>' +
+        '<p><b>監査ケース</b>：「この文では一致してほしい／ほしくない」を登録しておくと、外れたものが<span class="pill fp">誤発火候補</span><span class="pill miss">拾い漏れ</span>として出ます。</p>' +
+        '<p><b>手動の記録</b>：照合タブで押した判断の一覧です。</p>'],
+      ['4. 比較：直す前と後を比べる',
+        '<p>管理タブで「複製」して新版を作り、キーワードを直してから、比較タブで同じ文を照合します。直したことで拾えなくなった項目も分かります。</p>'],
+      ['5. 連動：ターンの流れを見る',
+        '<p>会話を1ターンずつ入れると、各AI生成に影響しうる項目を時系列で並べます。一致した項目は次のAI生成1回に効く、という前提で表示します。</p>'],
+      ['ことば',
+        '<p><b>発火候補</b>：キーワードが文字列として一致した項目</p>' +
+        '<p><b>誤発火</b>：一致したが、場面としては呼ばれてほしくない（例：斬→斬新）</p>' +
+        '<p><b>拾い漏れ</b>：呼ばれてほしいのに一致しない（例：「目が合」では「目を合わせ」を拾えない）</p>' +
+        '<p><b>表記ゆれ</b>：ひらがな・カタカナ・全角半角の違い。実機では変換されないので、別の語として扱います</p>'],
+      ['データについて',
+        '<p>入力した内容は、このブラウザの中だけに保存されます。外部へは送信しません。スマホとPCでは別々に保存されるので、移すときは管理タブの「すべて書き出す」を使ってください。</p>']
+    ];
+    sheet({
+      title: '使い方',
+      focus: false,
+      html: g.map(function (x, i) {
+        return '<details class="fold"' + (i < 2 ? ' open' : '') + '><summary>' + esc(x[0]) + '</summary><div class="fold-body guide">' + x[1] + '</div></details>';
+      }).join('')
+    });
+  }
+
   /* ================= 起動 ================= */
 
   function addSample() {
@@ -1342,6 +1481,9 @@
       if (a.dataset.action === 'add-sample') addSample();
       if (a.dataset.action === 'goto-manage') setTab('manage');
       if (a.dataset.action === 'dup-active') { duplicateLb(activeLb()); renderView(); }
+      if (a.dataset.action === 'quick-add') quickAddSheet();
+      if (a.dataset.action === 'open-guide') guideSheet();
+      if (a.dataset.action === 'dismiss-welcome') { state.guideSeen = true; save(); var w = a.closest('.panel'); if (w) w.remove(); }
     });
     view.addEventListener('click', function (e) {
       if (state.tab === 'sim') onSimClick(e);

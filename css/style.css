@@ -107,7 +107,22 @@ p { margin: 0; }
 .brand-name { font-family: var(--font-display); font-weight: 700; font-size: 1.05rem; white-space: nowrap; }
 .brand-sub { font-size: 0.7rem; color: var(--ink-soft); letter-spacing: 0.04em; white-space: nowrap; }
 .lb-picker { margin-left: auto; min-width: 0; flex: 0 1 220px; }
+@media (max-width: 440px) {
+  .app-header-inner { gap: 8px; }
+  .brand-sub { display: none; }
+  .brand-name { font-size: 0.95rem; }
+  .lb-picker { flex-basis: 170px; }
+}
 .lb-picker select { width: 100%; }
+.help-btn {
+  flex: none; width: 40px; height: 40px; border-radius: 50%;
+  border: 1px solid var(--line); background: var(--surface);
+  font-family: var(--font-display); font-weight: 700; font-size: 1.05rem; color: var(--accent);
+  cursor: pointer;
+}
+.steps { margin: 0; padding-left: 1.4em; display: flex; flex-direction: column; gap: 4px; }
+.guide p { font-size: 0.9rem; }
+.guide .pill { margin-right: 4px; }
 
 main {
   max-width: 760px;
